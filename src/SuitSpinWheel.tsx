@@ -147,11 +147,20 @@ function pickWinnerIndex(
 
 function nextRotation(prev: number, winnerIndex: number, minFullTurns: number): number {
   const Cw = CENTER_DEG[winnerIndex];
-  const equiv = (360 - (Cw % 360)) % 360;
+  
+  // Random offset between -38 and +38 degrees so it doesn't land exactly on the slice border
+  const randomOffset = (Math.random() * 76) - 38;
+  const targetDeg = Cw + randomOffset;
+  
+  const equiv = (360 - (((targetDeg % 360) + 360) % 360)) % 360;
   const prevNorm = ((prev % 360) + 360) % 360;
   let delta = equiv - prevNorm;
   if (delta <= 0) delta += 360;
-  delta += 360 * minFullTurns;
+  
+  // Randomize the number of full turns to make the spin less predictable
+  const extraTurns = Math.floor(Math.random() * 4); // 0 to 3 extra turns
+  delta += 360 * (minFullTurns + extraTurns);
+  
   return prev + delta;
 }
 
@@ -225,6 +234,7 @@ export function SuitSpinWheel() {
   const [spinning, setSpinning] = useState(false);
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
   const [landBurst, setLandBurst] = useState(0);
+  const [spinTime, setSpinTime] = useState(2.65);
   const [counts, setCounts] = useState<Record<number, number>>(() => ({
     ...INITIAL_COUNTS,
   }));
@@ -256,7 +266,7 @@ export function SuitSpinWheel() {
     }
   }, []);
 
-  const spinDuration = reduceMotion ? 0.01 : 2.65;
+  const spinDuration = reduceMotion ? 0.01 : spinTime;
   const minFullTurns = reduceMotion ? 1 : 5;
 
   const transition = reduceMotion
@@ -274,6 +284,11 @@ export function SuitSpinWheel() {
     const family = SEGMENTS[winner]!.family;
     lastFamilyRef.current = family;
     pendingWinnerRef.current = winner;
+    
+    const currentSpinTime = 2.4 + Math.random() * 1.2; // 2.4s to 3.6s
+    setSpinTime(currentSpinTime);
+    const activeSpinDuration = reduceMotion ? 0.01 : currentSpinTime;
+
     setAnnouncement(null);
     setSpinning(true);
     clearTickInterval();
@@ -309,7 +324,7 @@ export function SuitSpinWheel() {
         });
     }
 
-    if (ticksOn && !reduceMotion && spinDuration > 0.1) {
+    if (ticksOn && !reduceMotion && activeSpinDuration > 0.1) {
       tickIntervalRef.current = setInterval(() => {
         const c = audioCtxRef.current;
         if (!c) return;
@@ -325,7 +340,7 @@ export function SuitSpinWheel() {
           tickIntervalRef.current = null;
         }
         tickStopRef.current = null;
-      }, Math.max(0, spinDuration * 1000 - 30));
+      }, Math.max(0, activeSpinDuration * 1000 - 30));
     }
 
     setRotation((prev) => nextRotation(prev, winner, minFullTurns));
