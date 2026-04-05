@@ -5,6 +5,9 @@ import {
   useReducedMotion,
 } from 'framer-motion';
 
+/** Vite resolves this to a real URL in dev/build (avoids missing public/fahhhhh.mp3). */
+import voiceSrc from './assets/fahhhhh.mp3';
+
 type SuitFamily = 'black' | 'red';
 
 const STORAGE_TICKS = 'suitWheel_audioTicks';
@@ -21,7 +24,7 @@ const SEGMENTS: ReadonlyArray<{
 }> = [
   {
     id: 0,
-    name: 'Spades',
+    name: 'Hukum',
     symbol: '♠',
     family: 'black',
     fill: '#0c1522',
@@ -31,7 +34,7 @@ const SEGMENTS: ReadonlyArray<{
   },
   {
     id: 1,
-    name: 'Hearts',
+    name: 'Dil',
     symbol: '♥',
     family: 'red',
     fill: '#3a121c',
@@ -41,7 +44,7 @@ const SEGMENTS: ReadonlyArray<{
   },
   {
     id: 2,
-    name: 'Clubs',
+    name: 'Chidi',
     symbol: '♣',
     family: 'black',
     fill: '#08141c',
@@ -51,7 +54,7 @@ const SEGMENTS: ReadonlyArray<{
   },
   {
     id: 3,
-    name: 'Diamonds',
+    name: 'Diamond',
     symbol: '♦',
     family: 'red',
     fill: '#451a2e',
@@ -74,14 +77,72 @@ const INITIAL_COUNTS: Record<number, number> = {
   3: 0,
 };
 
-function pickWinnerIndex(lastFamily: SuitFamily | null): number {
+/** Until every suit has landed at least once, each suit can win at most this many times. */
+const MAX_PER_SUIT_BEFORE_ALL_SEEN = 2;
+
+/** Previous 4 spins + this spin = 5; each colour (black/red) appears at most twice in that window. */
+const MAX_SAME_COLOUR_IN_WINDOW = 2;
+
+function allSuitsHaveAppearedOnce(counts: Record<number, number>): boolean {
+  return SEGMENTS.every((s) => (counts[s.id] ?? 0) >= 1);
+}
+
+function countColourInLastFour(families: readonly SuitFamily[], colour: SuitFamily): number {
+  return families.filter((f) => f === colour).length;
+}
+
+/**
+ * Adding one spin with `colour` must keep that colour's count in (lastFour + new) ≤ 2.
+ * lastFour = outcomes of the previous 4 spins (oldest → newest).
+ */
+function canAddColourWithoutBreakingWindow(
+  lastFourFamilies: readonly SuitFamily[],
+  colour: SuitFamily,
+): boolean {
+  return countColourInLastFour(lastFourFamilies, colour) < MAX_SAME_COLOUR_IN_WINDOW;
+}
+
+/** Choose black vs red for the next spin: prefer alternating when it respects the 5-spin colour cap. */
+function pickNextColourFamily(
+  lastFamily: SuitFamily | null,
+  lastFourFamilies: readonly SuitFamily[],
+): SuitFamily {
   if (lastFamily === null) {
-    const pool = Math.random() < 0.5 ? BLACK_POOL : RED_POOL;
+    const blackOk = canAddColourWithoutBreakingWindow(lastFourFamilies, 'black');
+    const redOk = canAddColourWithoutBreakingWindow(lastFourFamilies, 'red');
+    if (blackOk && redOk) return Math.random() < 0.5 ? 'black' : 'red';
+    if (blackOk) return 'black';
+    if (redOk) return 'red';
+    return Math.random() < 0.5 ? 'black' : 'red';
+  }
+
+  const alt: SuitFamily = lastFamily === 'black' ? 'red' : 'black';
+  const altOk = canAddColourWithoutBreakingWindow(lastFourFamilies, alt);
+  const sameOk = canAddColourWithoutBreakingWindow(lastFourFamilies, lastFamily);
+
+  if (altOk) return alt;
+  if (sameOk) return lastFamily;
+  return alt;
+}
+
+/** Pick a random id from `pool`, respecting the max-per-suit cap until all suits have appeared. */
+function pickFromPool(pool: readonly number[], counts: Record<number, number>): number {
+  if (allSuitsHaveAppearedOnce(counts)) {
     return pool[Math.floor(Math.random() * pool.length)]!;
   }
-  const nextFamily: SuitFamily = lastFamily === 'black' ? 'red' : 'black';
-  const pool = nextFamily === 'black' ? BLACK_POOL : RED_POOL;
-  return pool[Math.floor(Math.random() * pool.length)]!;
+  const underCap = pool.filter((id) => (counts[id] ?? 0) < MAX_PER_SUIT_BEFORE_ALL_SEEN);
+  const choices = underCap.length > 0 ? underCap : [...pool];
+  return choices[Math.floor(Math.random() * choices.length)]!;
+}
+
+function pickWinnerIndex(
+  lastFamily: SuitFamily | null,
+  counts: Record<number, number>,
+  lastFourFamilies: readonly SuitFamily[],
+): number {
+  const targetFamily = pickNextColourFamily(lastFamily, lastFourFamilies);
+  const pool = targetFamily === 'black' ? BLACK_POOL : RED_POOL;
+  return pickFromPool(pool, counts);
 }
 
 function nextRotation(prev: number, winnerIndex: number, minFullTurns: number): number {
@@ -138,65 +199,6 @@ function playTickSound(ctx: AudioContext, masterGain: number) {
   osc.stop(t + 0.06);
 }
 
-/** One soft hand-clap–like hit (band-limited noise burst). */
-function playClapHit(
-  ctx: AudioContext,
-  startTime: number,
-  masterGain: number,
-  centerHz: number,
-) {
-  const dur = 0.095;
-  const rate = ctx.sampleRate;
-  const n = Math.max(1, Math.floor(rate * dur));
-  const buffer = ctx.createBuffer(1, n, rate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < n; i++) {
-    const env = Math.pow(1 - i / n, 1.65);
-    data[i] = (Math.random() * 2 - 1) * env;
-  }
-  const src = ctx.createBufferSource();
-  src.buffer = buffer;
-  const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = centerHz;
-  bp.Q.value = 1.15;
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, startTime);
-  g.gain.exponentialRampToValueAtTime(0.2 * masterGain, startTime + 0.004);
-  g.gain.exponentialRampToValueAtTime(0.0001, startTime + dur);
-  src.connect(bp);
-  bp.connect(g);
-  g.connect(ctx.destination);
-  src.start(startTime);
-  src.stop(startTime + dur + 0.025);
-}
-
-/** Slow applause when the winning colour / suit is revealed. */
-function playSlowClapOpening(ctx: AudioContext, family: SuitFamily) {
-  const t0 = ctx.currentTime + 0.06;
-  const centerBase = family === 'red' ? 1680 : 1420;
-  const gaps = [0, 0.5, 0.56, 0.62, 0.7];
-  const vols = [0.38, 0.44, 0.5, 0.54, 0.58];
-  let acc = 0;
-  for (let i = 0; i < vols.length; i++) {
-    acc += gaps[i];
-    playClapHit(ctx, t0 + acc, vols[i]!, centerBase + i * 35);
-  }
-}
-
-function announceSuit(name: string, enabled: boolean) {
-  if (!enabled || typeof window === 'undefined' || !window.speechSynthesis) return;
-  try {
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(name);
-    u.rate = 1.05;
-    u.pitch = 1;
-    window.speechSynthesis.speak(u);
-  } catch {
-    /* ignore */
-  }
-}
-
 type Announcement = {
   key: number;
   id: number;
@@ -214,6 +216,10 @@ export function SuitSpinWheel() {
   const announceSeqRef = useRef(0);
   const voiceOnRef = useRef(true);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  /** Primed on first Spin click so play() after the animation is not blocked as autoplay. */
+  const voiceAudioRef = useRef<HTMLAudioElement | null>(null);
+  /** Last spin colours (newest at end), for the 5-spin colour cap. */
+  const colourHistoryRef = useRef<SuitFamily[]>([]);
 
   const [rotation, setRotation] = useState(0);
   const [spinning, setSpinning] = useState(false);
@@ -263,7 +269,8 @@ export function SuitSpinWheel() {
 
   const spin = useCallback(() => {
     if (spinning) return;
-    const winner = pickWinnerIndex(lastFamilyRef.current);
+    const lastFourColours = colourHistoryRef.current.slice(-4);
+    const winner = pickWinnerIndex(lastFamilyRef.current, counts, lastFourColours);
     const family = SEGMENTS[winner]!.family;
     lastFamilyRef.current = family;
     pendingWinnerRef.current = winner;
@@ -271,32 +278,60 @@ export function SuitSpinWheel() {
     setSpinning(true);
     clearTickInterval();
 
-    void (async () => {
-      let ctx = audioCtxRef.current;
-      if (!ctx) {
-        ctx = new AudioContext();
-        audioCtxRef.current = ctx;
-      }
-      if (ctx.state === 'suspended') await ctx.resume();
+    let ctx = audioCtxRef.current;
+    if (!ctx) {
+      ctx = new AudioContext();
+      audioCtxRef.current = ctx;
+    }
+    if (ctx.state === 'suspended') {
+      void ctx.resume().catch((e: unknown) =>
+        console.error('[SuitWheel] AudioContext resume failed:', e),
+      );
+    }
 
-      if (ticksOn && !reduceMotion && spinDuration > 0.1) {
-        tickIntervalRef.current = setInterval(() => {
-          const c = audioCtxRef.current;
-          if (c) playTickSound(c, 0.12);
-        }, 54);
-        tickStopRef.current = setTimeout(() => {
-          if (tickIntervalRef.current !== null) {
-            clearInterval(tickIntervalRef.current);
-            tickIntervalRef.current = null;
-          }
-          tickStopRef.current = null;
-        }, Math.max(0, spinDuration * 1000 - 30));
-      }
-    })();
+    if (!voiceAudioRef.current) {
+      const el = new Audio(voiceSrc);
+      el.preload = 'auto';
+      el.volume = 1;
+      el.muted = true;
+      el.load();
+      voiceAudioRef.current = el;
+
+      // Unlock playback on first user gesture so later voice playback is not blocked.
+      void el.play()
+        .then(() => {
+          el.pause();
+          el.currentTime = 0;
+          el.muted = false;
+        })
+        .catch(() => {
+          el.muted = false;
+        });
+    }
+
+    if (ticksOn && !reduceMotion && spinDuration > 0.1) {
+      tickIntervalRef.current = setInterval(() => {
+        const c = audioCtxRef.current;
+        if (!c) return;
+        if (c.state !== 'running') {
+          void c.resume();
+          return;
+        }
+        playTickSound(c, 0.12);
+      }, 54);
+      tickStopRef.current = setTimeout(() => {
+        if (tickIntervalRef.current !== null) {
+          clearInterval(tickIntervalRef.current);
+          tickIntervalRef.current = null;
+        }
+        tickStopRef.current = null;
+      }, Math.max(0, spinDuration * 1000 - 30));
+    }
 
     setRotation((prev) => nextRotation(prev, winner, minFullTurns));
   }, [
     spinning,
+    counts,
     ticksOn,
     reduceMotion,
     spinDuration,
@@ -318,50 +353,71 @@ export function SuitSpinWheel() {
       family: seg.family,
     });
     setCounts((c) => ({ ...c, [w]: (c[w] ?? 0) + 1 }));
+    colourHistoryRef.current = [...colourHistoryRef.current, seg.family].slice(-32);
     setLandBurst((b) => b + 1);
-    announceSuit(seg.name, voiceOnRef.current);
+    if (voiceOnRef.current) {
+      const el = voiceAudioRef.current;
+      if (!el) {
+        console.warn(
+          '[SuitWheel] Voice clip: no primed audio yet. Path should be:',
+          voiceSrc,
+          'BASE_URL:',
+          import.meta.env.BASE_URL,
+        );
+      } else {
+        el.currentTime = 0;
+        void el.play().catch((err: unknown) =>
+          console.error('[SuitWheel] Voice clip play failed:', err),
+        );
+      }
+    }
     setSpinning(false);
     pendingWinnerRef.current = null;
-
-    if (!reduceMotion) {
-      void (async () => {
-        let ctx = audioCtxRef.current;
-        if (!ctx) {
-          ctx = new AudioContext();
-          audioCtxRef.current = ctx;
-        }
-        if (ctx.state === 'suspended') await ctx.resume();
-        playSlowClapOpening(ctx, seg.family);
-      })();
-    }
-  }, [clearTickInterval, reduceMotion]);
+  }, [clearTickInterval]);
 
   useEffect(() => () => clearTickInterval(), [clearTickInterval]);
 
   return (
-    <div className="relative flex min-h-svh flex-col bg-zinc-950 text-zinc-100">
+    <div
+      className="relative flex min-h-svh flex-col text-zinc-100"
+      style={{
+        background: `
+          radial-gradient(ellipse 110% 70% at 50% -15%, rgba(129, 140, 248, 0.22), transparent 52%),
+          radial-gradient(ellipse 90% 55% at 100% 60%, rgba(167, 139, 250, 0.18), transparent 48%),
+          radial-gradient(ellipse 85% 50% at 0% 75%, rgba(59, 130, 246, 0.14), transparent 46%),
+          linear-gradient(165deg, #020617 0%, #0f172a 28%, #1e1b4b 52%, #312e81 68%, #0a0a0f 100%)
+        `,
+      }}
+    >
       <div
-        className="pointer-events-none absolute inset-0 opacity-[0.35]"
+        className="pointer-events-none absolute inset-0 opacity-50"
         style={{
           background:
-            'radial-gradient(ellipse 80% 50% at 50% -20%, rgba(34,211,238,0.12), transparent), radial-gradient(ellipse 60% 40% at 100% 50%, rgba(244,114,182,0.08), transparent), radial-gradient(ellipse 50% 50% at 0% 80%, rgba(45,212,191,0.06), transparent)',
+            'radial-gradient(ellipse 70% 45% at 50% 100%, rgba(15, 23, 42, 0.9), transparent 55%), radial-gradient(ellipse 50% 40% at 30% 20%, rgba(99, 102, 241, 0.08), transparent)',
         }}
       />
 
       <main className="relative z-10 mx-auto flex w-full max-w-lg flex-1 flex-col items-center justify-center gap-8 px-4 py-10 sm:px-6">
         <header className="text-center">
           <h1 className="text-balance font-semibold tracking-tight text-zinc-100 text-2xl sm:text-3xl">
-            Suit wheel
+            Trump Selector 
           </h1>
           <p className="mt-2 max-w-sm text-pretty text-sm text-zinc-500 sm:text-base">
-            Lands on a different color family every spin — black and red alternate.
+          Kismat ka pahiya, Trump hai bhaiya!
           </p>
         </header>
 
         <div className="relative flex w-full max-w-[min(100%,22rem)] flex-col items-center gap-5">
-          <div className="relative aspect-square w-full max-w-[min(85vmin,22rem)]">
+          <button
+            type="button"
+            onClick={spin}
+            disabled={spinning}
+            aria-busy={spinning}
+            aria-label={spinning ? 'Wheel is spinning' : 'Spin the suit wheel'}
+            className="relative aspect-square w-full max-w-[min(85vmin,22rem)] cursor-pointer touch-manipulation border-0 bg-transparent p-0 text-inherit focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-100"
+          >
             <div
-              className="absolute left-1/2 top-0 z-20 -translate-x-1/2 -translate-y-1"
+              className="absolute left-1/2 top-0 z-20 -translate-x-1/2 -translate-y-1 pointer-events-none"
               aria-hidden
             >
               <motion.div
@@ -399,8 +455,8 @@ export function SuitSpinWheel() {
                   <svg
                     viewBox="0 0 200 200"
                     className="h-full w-full"
-                    role="img"
-                    aria-label="Spinning wheel with four suit segments"
+                    aria-hidden
+                    focusable="false"
                   >
                     <defs>
                       <filter id="neon" x="-40%" y="-40%" width="180%" height="180%">
@@ -447,8 +503,8 @@ export function SuitSpinWheel() {
               </div>
             </div>
 
-            <div className="absolute left-1/2 top-1/2 z-10 h-[18%] max-h-18 w-[18%] max-w-18 -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-600/80 bg-zinc-900/95 shadow-[0_0_24px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.06)]" />
-          </div>
+            <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 h-[18%] max-h-18 w-[18%] max-w-18 -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-600/80 bg-zinc-900/95 shadow-[0_0_24px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.06)]" />
+          </button>
 
           <div className="flex w-full flex-col items-center gap-3">
             <button
