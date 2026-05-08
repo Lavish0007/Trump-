@@ -229,6 +229,18 @@ export function SuitSpinWheel() {
     ...INITIAL_COUNTS,
   }));
 
+  const [totalSpins, setTotalSpins] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetch('https://api.counterapi.dev/v1/lavish-trump-card-2026/spins')
+      .then((res) => {
+        if (!res.ok) return 0;
+        return res.json().then((data) => data.count);
+      })
+      .then((count) => setTotalSpins(count + 300))
+      .catch(() => setTotalSpins(300));
+  }, []);
+
   const [ticksOn, setTicksOn] = useState(() =>
     readBoolStorage(STORAGE_TICKS, true),
   );
@@ -355,6 +367,20 @@ export function SuitSpinWheel() {
     setCounts((c) => ({ ...c, [w]: (c[w] ?? 0) + 1 }));
     colourHistoryRef.current = [...colourHistoryRef.current, seg.family].slice(-32);
     setLandBurst((b) => b + 1);
+    
+    // Increment global counter
+    fetch('https://api.counterapi.dev/v1/lavish-trump-card-2026/spins/up')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && typeof data.count === 'number') {
+          setTotalSpins(data.count + 300);
+        }
+      })
+      .catch((err) => {
+        console.error('[SuitWheel] Failed to update global counter:', err);
+        setTotalSpins((prev) => (prev || 300) + 1);
+      });
+
     if (voiceOnRef.current) {
       const el = voiceAudioRef.current;
       if (!el) {
@@ -552,9 +578,15 @@ export function SuitSpinWheel() {
           </div>
 
           <div className="w-full">
-            <p className="mb-2 text-center text-[11px] font-medium uppercase tracking-wider text-zinc-500">
-              Spin history
-            </p>
+            <div className="mb-2 flex items-center justify-between px-1 text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+              <p>Spin history</p>
+              <p>
+                Total global spins:{' '}
+                <span className="text-zinc-300">
+                  {totalSpins === null ? '...' : totalSpins}
+                </span>
+              </p>
+            </div>
             <div className="grid w-full grid-cols-4 gap-2">
               {SEGMENTS.map((seg) => (
                 <div
