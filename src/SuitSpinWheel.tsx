@@ -242,13 +242,13 @@ export function SuitSpinWheel() {
   const [totalSpins, setTotalSpins] = useState<number | null>(null);
 
   useEffect(() => {
-    fetch('https://api.counterapi.dev/v1/lavish-trump-card-2026/spins')
+    fetch('https://api.counterapi.dev/v1/lavish-trump-card-real-v1/spins')
       .then((res) => {
         if (!res.ok) return 0;
         return res.json().then((data) => data.count);
       })
-      .then((count) => setTotalSpins(count + 300))
-      .catch(() => setTotalSpins(300));
+      .then((count) => setTotalSpins(count))
+      .catch(() => setTotalSpins(0));
   }, []);
 
   const [ticksOn, setTicksOn] = useState(() =>
@@ -384,16 +384,16 @@ export function SuitSpinWheel() {
     setLandBurst((b) => b + 1);
     
     // Increment global counter
-    fetch('https://api.counterapi.dev/v1/lavish-trump-card-2026/spins/up')
+    fetch('https://api.counterapi.dev/v1/lavish-trump-card-real-v1/spins/up')
       .then((res) => res.json())
       .then((data) => {
         if (data && typeof data.count === 'number') {
-          setTotalSpins(data.count + 300);
+          setTotalSpins(data.count);
         }
       })
       .catch((err) => {
         console.error('[SuitWheel] Failed to update global counter:', err);
-        setTotalSpins((prev) => (prev || 300) + 1);
+        setTotalSpins((prev) => (prev || 0) + 1);
       });
 
     if (voiceOnRef.current) {
